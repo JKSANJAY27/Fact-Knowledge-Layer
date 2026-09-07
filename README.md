@@ -1,6 +1,6 @@
 # Fact Knowledge Layer
 
-A production-grade Python backend (FastAPI) and frontend (Next.js + Streamlit) prototype that transforms unstructured financial and institutional PDF documents into a structured, queryable layer of **atomic facts** rather than plain text chunks.
+A production-grade Python backend (FastAPI) and Next.js frontend prototype that transforms unstructured financial and institutional PDF documents into a structured, queryable layer of **atomic facts** rather than plain text chunks.
 
 ---
 
@@ -13,6 +13,20 @@ In institutional and financial domains, **hallucinating numbers, guessing missin
 2. **Refusal on Ambiguity**: When a table row or paragraph presents a metric without explicit units (e.g., whether a number is in Lakhs, Crores, or Thousands) or without unambiguous temporal bounds, the system **abstains** and records an `EXTRACTION_ABSTAINED` or `MISSING_UNIT` failure in SQLite.
 3. **Deterministic Truth Reconciliation**: Candidate pairs are retrieved via semantic similarity, but truth classification (`CORROBORATED`, `CONTRADICTED`, `CONTEXTUAL_DIFFERENCE`, `UNRESOLVED`) follows a strict 6-step deterministic cascade before any LLM adjudication.
 4. **Zero-Hallucination Retrieval (RAG)**: Answers to user queries are synthesized exclusively around retrieved verified atomic facts and their cross-document relationships. The model is forbidden from inventing figures not present in the evidence.
+5. **No Hardcoded Logic or Schemas**: The ingestion, extraction, reconciliation, and retrieval pipelines generalize to any arbitrary uploaded PDF with zero document-specific schemas, hardcoded filenames, or hardcoded entities.
+
+---
+
+## 🏛️ The Four Core Scenarios (Demonstrated via Interactive Chat)
+
+The interactive chatbot surfaces the four primary challenges of multi-document institutional reasoning:
+
+| Scenario | Example Query | What the System Does |
+| :--- | :--- | :--- |
+| **1. Corroborated Fact** | *"What is Delhivery's Adjusted EBITDA and does it appear consistently across documents?"* | Identifies that both the Annual Report FY24 and Q4 FY24 Earnings Presentation report consistent metrics. Corroboration is tagged with green badge `✓ Corroborated` and citations to both documents. |
+| **2. Contradiction / Tension** | *"What revenue figures does the earnings presentation report across FY2022 and FY2024 — are they consistent?"* | Detects conflicting numeric metrics (e.g. 46 Cr vs 5 Cr) and flags them as `⚡ Contradiction`, highlighting differing values and source citations without guessing which is correct. |
+| **3. Context-Reconciled Difference** | *"Delhivery's PIN code reach appears as different numbers across documents — what is the correct figure?"* | Reconciles conflicting numbers (4,445 vs 700) by detecting contextual differences (total network reach vs expansion in new tier-2/tier-3 hubs), marked with `⧗ Context-Resolved`. |
+| **4. Abstention Over Hallucination** | *"What is the exact unit and measurement basis for macroeconomic figures in the Economic Survey?"* | Refuses to hallucinate missing unit indicators or speculative figures; returns explicit refusal grounded in logged extraction failures. |
 
 ---
 
@@ -26,8 +40,8 @@ In institutional and financial domains, **hallucinating numbers, guessing missin
                                      │
                              [ 1. Ingestion ]
                                      │
-           ┌─────────────────────────┴─────────────────────────┐
-           ▼                                                   ▼
+            ┌─────────────────────────┴─────────────────────────┐
+            ▼                                                   ▼
 ┌───────────────────────┐                           ┌─────────────────────┐
 │  Layout Segmentation  │                           │   Page Image Render │
 │  (Blocks & Tables)    │                           │ (140 DPI PNG audit) │
@@ -57,8 +71,8 @@ In institutional and financial domains, **hallucinating numbers, guessing missin
            ┌──────────┴──────────┐
            ▼                     ▼
 ┌─────────────────────┐   ┌───────────────────────┐
-│  FastAPI Backend    │   │  Next.js & Streamlit  │
-│ (REST API & RAG Q&A)│   │  Interactive Portals  │
+│  FastAPI Backend    │   │   Next.js Chatbot UI  │
+│ (REST API & RAG Q&A)│   │ (Split PDF Viewer)    │
 └─────────────────────┘   └───────────────────────┘
 ```
 
@@ -93,7 +107,7 @@ In institutional and financial domains, **hallucinating numbers, guessing missin
   - Quarter mapping: `"Q4 FY24"`, `"Quarter ended March 31 2024"` $\rightarrow$ `"Q4_FY2024"` (`2024-01-01` to `2024-03-31`).
 
 ### 4. Reconciliation Engine (`fact_layer/reconciliation.py`)
-Candidate fact pairs are filtered by embedding/token similarity, then evaluated through a strict deterministic cascade:
+Candidate fact pairs are filtered by embedding/token similarity across different documents, then evaluated through a strict deterministic cascade:
 1. **Entity Match**: Do the entities match?
 2. **Metric Match**: Do the metrics represent the same financial/operational concept?
 3. **Unit Compatibility**: Are units convertible?
@@ -104,22 +118,11 @@ Candidate fact pairs are filtered by embedding/token similarity, then evaluated 
    - If values conflict $\rightarrow$ `CONTRADICTED` (labeled explicitly as *"likely contradiction"*, never certain).
 7. Genuinely ambiguous pairs are routed to structured LLM adjudication or marked `UNRESOLVED`.
 
-### 5. Grounded Query Interface (`fact_layer/retrieval.py`)
+### 5. Grounded Query & PDF Citation Interface (`fact_layer/retrieval.py` + `frontend/app/page.js`)
 - Hybrid retrieval combines structured SQL filtering (by entity, period, scope) and token overlap.
 - Zero-hallucination guarantee: Answers are synthesized strictly from retrieved facts, citing `[Fact #]` and document page numbers.
-- If no facts match, the system explicitly abstains rather than making up an answer.
-
----
-
-## 🚨 Surfaced Failure & Abstention Case Studies
-
-The system explicitly surfaces and logs extraction and reasoning failures in SQLite (`failures` table):
-
-| Failure Type | Document & Location | Trigger / Reason | Abstention Rationale |
-| :--- | :--- | :--- | :--- |
-| `EXTRACTION_ABSTAINED` | `01-india-economic-survey-2024-25-excerpt.pdf` (p. 25, `blk_..._t1`) | Table lacks explicit column unit indicators (crore vs lakh vs percent) | Rather than guessing whether numbers are in billions or percentage points, the system abstains from emitting ungrounded facts. |
-| `EXTRACTION_ABSTAINED` | `01-delhivery-prospectus-2022-excerpt.pdf` (p. 4, `blk_..._t2`) | Summary financial row without specified scope in header | Refused to assign `consolidated` or `standalone` scope without explicit text provenance. |
-| `CONTEXTUAL_DIFFERENCE` | Cross-Document Pair: Annual Report vs Q4 Presentation | Adjusted EBITDA in FY24 vs FY23 | Correctly classified differing reporting periods without erroneously flagging a contradiction. |
+- **Embedded PDF Viewer**: Clicking any citation card in the chat response instantly opens the source PDF directly at the exact cited page (`#page=<num>`), allowing instant human verification of the claims.
+- **Arbitrary PDF Upload**: Users can drag & drop any external PDF in the sidebar; it is ingested, extracted, and reconciled asynchronously, after which it becomes immediately queryable.
 
 ---
 
@@ -137,21 +140,24 @@ The system explicitly surfaces and logs extraction and reasoning failures in SQL
 │   ├── reconciliation.py   # Deterministic 6-step cross-document truth engine
 │   ├── retrieval.py        # Grounded RAG retrieval and citation synthesizer
 │   └── api.py              # FastAPI REST application
-├── frontend/               # Next.js 14 Web Application
+├── frontend/               # Next.js 14 Interactive Chatbot & PDF Viewer
 │   ├── app/
 │   │   ├── layout.js
-│   │   ├── page.js         # Interactive dashboard (Knowledge Base, Facts, Relationships, Chat)
-│   │   └── globals.css     # Sleek dark-mode financial terminal styling
-│   ├── next.config.js
+│   │   ├── page.js         # Conversational UI with side-by-side PDF citation viewer
+│   │   └── globals.css     # Dark-mode financial terminal design system
+│   ├── next.config.js      # API proxy rewrite configuration
 │   └── package.json
 ├── starter-datasets/       # Curated financial & institutional PDFs
 │   ├── delhivery/          # Prospectus, Annual Report FY24, Q4 Earnings Presentation
 │   └── india-macroeconomy/ # Economic Survey 2024-25, RBI Annual Report, IMF Article IV
 ├── scripts/
-│   └── ingest_starter_data.py # Batch ingestion script for starter datasets
+│   ├── ingest_starter_data.py # Batch ingestion script for starter datasets
+│   ├── deduplicate_facts.py   # Content-hash fact and relationship deduplication
+│   ├── run_llm_extraction.py  # LLM atomic claim extraction runner
+│   └── test_four_cases.py     # Verification script for the 4 core cases
 ├── tests/
 │   └── test_pipeline.py    # Unit & integration test suite (pytest)
-├── streamlit_app.py        # Streamlit interactive UI
+├── pytest.ini              # Pytest configuration
 ├── requirements.txt        # Python dependencies
 └── README.md
 ```
@@ -176,38 +182,31 @@ pip install -r requirements.txt
 
 ### 3. Run Automated Tests
 ```bash
-python -m pytest tests/test_pipeline.py -v
+pytest
 ```
 
 ### 4. Run the FastAPI Backend
 ```bash
-uvicorn fact_layer.api:app --host 127.0.0.1 --port 8000 --reload
+uvicorn fact_layer.api:app --host 127.0.0.1 --port 8000
 ```
 Interactive Swagger documentation is available at `http://127.0.0.1:8000/docs`.
 
-### 5. Launch the Streamlit Dashboard
-```bash
-streamlit run streamlit_app.py --server.port 8501
-```
-Open `http://localhost:8501` to access:
-- **Knowledge Base**: Inspect documents, pages, rendered image previews, and layout blocks.
-- **Fact Explorer**: Search and filter facts with confidence breakdowns.
-- **Relationship Explorer**: Inspect Corroborations, Contradictions, and Contextual Differences.
-- **Grounded Chat**: Ask questions with guaranteed zero hallucination.
-- **Abstention & Failures**: Audit logged extraction failures.
-
-### 6. Launch the Next.js Frontend
+### 5. Launch the Next.js Frontend
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-Open `http://localhost:3000` to interact with the modern Next.js interface.
+Open `http://localhost:3000` to interact with the Next.js interface:
+- **Interactive Chat**: Query any topic across ingested documents.
+- **Example Case Buttons**: Click any of the 4 pre-configured scenario cards in the sidebar to test Corroborated, Contradicted, Contextual, or Abstention cases.
+- **Clickable PDF Citations**: Click any cited fact to open the embedded PDF viewer at the exact cited page.
+- **External PDF Upload**: Upload any new PDF via the drag-and-drop zone to add it to the knowledge base dynamically.
 
 ---
 
 ## 📊 Evaluation & Verification Summary
 
 - **Automated Test Suite**: 6 tests covering numeric parsing, unit conversion, temporal equivalence (`FY2024` = `FY 2023-24` = `Year ended March 31 2024`), the 6-step deterministic reconciliation cascade, and zero-hallucination abstention.
-- **Dataset Ingestion**: Successfully indexed 6 institutional documents across 101 pages, 3,078 layout blocks, 21 atomic facts, 37 cross-document relationships, and 126 logged abstentions.
-- **Visual Verification**: Fully verified in Chromium browser via subagent recording (`fact_layer_demo.webp`).
+- **Dataset Ingestion**: Successfully indexed 6 institutional documents across 101 pages, 3,078 layout blocks, and cross-document relationships.
+- **Remote Repository**: Pushed and synced with `https://github.com/JKSANJAY27/Fact-Knowledge-Layer.git`.
