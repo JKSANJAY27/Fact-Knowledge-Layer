@@ -25,9 +25,21 @@ class FactStorage:
         import shutil
         self.db_path = db_path or DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        # If database file doesn't exist or is 0 bytes, auto-seed from seed_data.sqlite3 if present
+        # If database file doesn't exist, is 0 bytes, or has 0 facts, auto-seed from seed_data.sqlite3
         seed_path = self.db_path.parent / "seed_data.sqlite3"
-        if (not self.db_path.exists() or self.db_path.stat().st_size == 0) and seed_path.exists():
+        should_seed = False
+        if not self.db_path.exists() or self.db_path.stat().st_size == 0:
+            should_seed = True
+        elif seed_path.exists():
+            try:
+                with sqlite3.connect(str(self.db_path)) as temp_conn:
+                    cnt = temp_conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
+                    if cnt == 0:
+                        should_seed = True
+            except Exception:
+                should_seed = True
+
+        if should_seed and seed_path.exists():
             try:
                 shutil.copy2(seed_path, self.db_path)
             except Exception:

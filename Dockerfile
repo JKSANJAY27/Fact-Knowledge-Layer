@@ -12,15 +12,18 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend and data
+# Copy backend, data, and seed database
 COPY fact_layer/ ./fact_layer/
 COPY starter-datasets/ ./starter-datasets/
 COPY scripts/ ./scripts/
 COPY pytest.ini .
 COPY tests/ ./tests/
+COPY data/seed_data.sqlite3 ./data/seed_data.sqlite3
 
-# Pre-create data directories if not present
-RUN mkdir -p data/pages data/uploads data/pdfs
+# Pre-create data directories, pre-seed SQLite database, and copy PDFs
+RUN mkdir -p data/pages data/uploads data/pdfs && \
+    cp ./data/seed_data.sqlite3 ./data/fact_layer.sqlite3 && \
+    find starter-datasets/ -name "*.pdf" -exec cp {} data/pdfs/ \;
 
 # Expose port
 EXPOSE 8000
