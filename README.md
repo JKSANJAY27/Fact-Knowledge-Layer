@@ -17,16 +17,84 @@ In institutional and financial domains, **hallucinating numbers, guessing missin
 
 ---
 
-## 🏛️ The Four Core Scenarios (Demonstrated via Interactive Chat)
+## 🏛️ Demonstration Scenarios & Example Questions
 
-The interactive chatbot surfaces the four primary challenges of multi-document institutional reasoning:
+The problem statement requires handling four distinct scenarios across documents. The following curated questions can be tested directly in the chat interface:
 
-| Scenario | Example Query | What the System Does |
-| :--- | :--- | :--- |
-| **1. Corroborated Fact** | *"What is Delhivery's Adjusted EBITDA and does it appear consistently across documents?"* | Identifies that both the Annual Report FY24 and Q4 FY24 Earnings Presentation report consistent metrics. Corroboration is tagged with green badge `✓ Corroborated` and citations to both documents. |
-| **2. Contradiction / Tension** | *"What revenue figures does the earnings presentation report across FY2022 and FY2024 — are they consistent?"* | Detects conflicting numeric metrics (e.g. 46 Cr vs 5 Cr) and flags them as `⚡ Contradiction`, highlighting differing values and source citations without guessing which is correct. |
-| **3. Context-Reconciled Difference** | *"Delhivery's PIN code reach appears as different numbers across documents — what is the correct figure?"* | Reconciles conflicting numbers (4,445 vs 700) by detecting contextual differences (total network reach vs expansion in new tier-2/tier-3 hubs), marked with `⧗ Context-Resolved`. |
-| **4. Abstention Over Hallucination** | *"What is the exact unit and measurement basis for macroeconomic figures in the Economic Survey?"* | Refuses to hallucinate missing unit indicators or speculative figures; returns explicit refusal grounded in logged extraction failures. |
+### Scenario 1: Corroborated Fact (Cross-Document Agreement)
+> **Goal**: Find a fact supported across multiple documents, even if phrased or formatted differently.
+- **Example Question A**: *"What is Delhivery's Adjusted EBITDA and does it appear consistently across the annual report and earnings presentation?"*
+  - **Expected Outcome**: Identifies consistent EBITDA reporting between `02-delhivery-annual-report-fy24-excerpt.pdf` and `03-delhivery-q4-fy24-earnings-presentation.pdf`. Both source documents and exact pages are cited with a `✓ Corroborated` badge.
+- **Example Question B**: *"What is Delhivery's Express Parcel volume or segment performance across documents?"*
+  - **Expected Outcome**: Cross-verifies volume metrics reported across disclosure excerpts.
+
+### Scenario 2: Contradiction / Tension Between Documents
+> **Goal**: Detect genuine numerical or semantic conflicts where documents disagree on the same metric, entity, and period.
+- **Example Question A**: *"What revenue figures does the earnings presentation report across FY2022 and FY2024 — are they consistent?"*
+  - **Expected Outcome**: Highlights the variance between periods/filings without guessing or forcing alignment. Tagged with `⚡ Contradiction`.
+- **Example Question B**: *"Are there conflicting figures reported for Delhivery's operating revenue between the prospectus and subsequent filings?"*
+  - **Expected Outcome**: Highlights divergent figures and presents side-by-side citations for human review.
+
+### Scenario 3: Context-Reconciled Difference (Apparent Conflict Resolved by Context)
+> **Goal**: Identify two facts that initially look contradictory but are reconciled once context (e.g., scope, unit, definition, or timeframe) is understood.
+- **Example Question A**: *"Delhivery's PIN code reach appears as different numbers across documents — what is the correct figure and how can the discrepancy be explained?"*
+  - **Expected Outcome**: Discrepancy (e.g. 4,445 vs 700) is reconciled by discovering that one figure measures *total active PIN codes nationwide*, whereas the other describes *incremental pin codes added in tier-2/tier-3 hubs*. Tagged with `⧗ Context-Resolved`.
+- **Example Question B**: *"Why do Delhivery's reported financial numbers differ between standalone and consolidated statements?"*
+  - **Expected Outcome**: Explains how corporate entity scope (`consolidated` vs `standalone`) reconciles the differing numbers.
+
+### Scenario 4: Abstention Over Hallucination (Refusal to Guess)
+> **Goal**: System must explicitly refuse to answer when the source document lacks sufficient detail, units, or evidence.
+- **Example Question A**: *"What is the exact unit and measurement basis for macroeconomic figures in the Economic Survey?"*
+  - **Expected Outcome**: The system explicitly refuses to guess unstated units (e.g., whether figures are in Crores, Millions, or percentages) and cites logged extraction abstentions (`EXTRACTION_ABSTAINED`).
+- **Example Question B**: *"What was Delhivery's projected international revenue for 2030?"*
+  - **Expected Outcome**: Returns a direct abstention stating that no supporting atomic fact exists in the knowledge base, refusing to invent figures.
+
+---
+
+## ☁️ Deployment Guide
+
+The application is architected as a **decoupled Full-Stack system**:
+- **Frontend**: Next.js (can be deployed on **Vercel**)
+- **Backend**: FastAPI + SQLite + PyMuPDF (deploy on **Render**, **Railway**, or **Fly.io**)
+
+### Part 1: Deploying the Backend (Render / Railway)
+
+Because the Python backend requires a long-running server with file/PDF processing libraries (`PyMuPDF`, `pdfplumber`, `docling`), deploy it to a container/Python cloud host:
+
+#### Option A: Deploy on Render (Recommended & Free Tier Available)
+1. Go to [Render.com](https://render.com) and click **New + Web Service**.
+2. Connect your GitHub repository: `https://github.com/JKSANJAY27/Fact-Knowledge-Layer`.
+3. In the setup form:
+   - **Name**: `fact-knowledge-layer-api`
+   - **Environment**: `Docker` (Render will automatically detect the provided `Dockerfile`)
+   - **Instance Type**: Free or Starter
+4. Add **Environment Variables**:
+   - `GEMINI_API_KEY`: Your Gemini API key
+   - `GEMINI_MODEL`: `gemini-flash-latest` (or `gemini-1.5-flash`)
+   - `PORT`: `8000`
+5. Click **Deploy Web Service**.
+6. Note down your backend URL (e.g., `https://fact-knowledge-layer-api.onrender.com`).
+
+#### Option B: Deploy on Railway
+1. Go to [Railway.app](https://railway.app) and select **Deploy from GitHub repo**.
+2. Select `Fact-Knowledge-Layer`. Railway uses the repository `Dockerfile` automatically.
+3. In **Variables**, add `GEMINI_API_KEY` and `GEMINI_MODEL`.
+4. Generate a public domain under service settings (e.g., `https://...up.railway.app`).
+
+---
+
+### Part 2: Connecting the Vercel Frontend to the Deployed Backend
+
+Now that your frontend is deployed on Vercel:
+
+1. Open your Vercel project dashboard.
+2. Navigate to **Settings** > **Environment Variables**.
+3. Add a new variable:
+   - **Key**: `NEXT_PUBLIC_BACKEND_URL`
+   - **Value**: Your deployed backend URL (e.g., `https://fact-knowledge-layer-api.onrender.com` without a trailing slash).
+4. Go to **Deployments** and click **Redeploy** on the latest deployment so Next.js picks up the new environment variable.
+
+Now, all `/api/*` and `/static/*` requests (including chat, uploads, and PDF views) made by the Vercel app will seamlessly proxy to your live backend!
 
 ---
 
@@ -129,6 +197,7 @@ Candidate fact pairs are filtered by embedding/token similarity across different
 ## 📁 Repository Structure
 
 ```
+├── Dockerfile              # Docker container definition for backend deployment
 ├── fact_layer/
 │   ├── __init__.py
 │   ├── config.py           # Configuration, directory paths, environment variables
@@ -140,7 +209,7 @@ Candidate fact pairs are filtered by embedding/token similarity across different
 │   ├── reconciliation.py   # Deterministic 6-step cross-document truth engine
 │   ├── retrieval.py        # Grounded RAG retrieval and citation synthesizer
 │   └── api.py              # FastAPI REST application
-├── frontend/               # Next.js 14 Interactive Chatbot & PDF Viewer
+├── frontend/               # Next.js 14 Interactive Chatbot & PDF Viewer (Vercel-ready)
 │   ├── app/
 │   │   ├── layout.js
 │   │   ├── page.js         # Conversational UI with side-by-side PDF citation viewer
@@ -164,7 +233,7 @@ Candidate fact pairs are filtered by embedding/token similarity across different
 
 ---
 
-## 🚀 Quickstart Guide
+## 🚀 Local Development Quickstart
 
 ### 1. Prerequisites
 - Python 3.10+
@@ -197,11 +266,7 @@ cd frontend
 npm install
 npm run dev
 ```
-Open `http://localhost:3000` to interact with the Next.js interface:
-- **Interactive Chat**: Query any topic across ingested documents.
-- **Example Case Buttons**: Click any of the 4 pre-configured scenario cards in the sidebar to test Corroborated, Contradicted, Contextual, or Abstention cases.
-- **Clickable PDF Citations**: Click any cited fact to open the embedded PDF viewer at the exact cited page.
-- **External PDF Upload**: Upload any new PDF via the drag-and-drop zone to add it to the knowledge base dynamically.
+Open `http://localhost:3000` to interact with the Next.js interface.
 
 ---
 
