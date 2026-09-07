@@ -98,7 +98,8 @@ def _copy_pdf_for_serving(src: Path) -> str:
 def process_document_pipeline(
     file_path: Path,
     max_pages: Optional[int] = None,
-    job_id: Optional[str] = None
+    job_id: Optional[str] = None,
+    session_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """Runs the full ingestion → extraction → normalization → reconciliation pipeline on a file.
     Entirely schema-free: facts are discovered by the LLM from whatever content appears in the PDF.
@@ -108,6 +109,8 @@ def process_document_pipeline(
 
     # 1. Ingest: parse PDF into pages + blocks (text, tables, layout)
     doc_rec, pages, blocks = ingestor.ingest_pdf(file_path, max_pages=max_pages, force_reprocess=False)
+    if session_id:
+        storage.set_document_session(doc_rec.document_id, session_id)
 
     if job_id:
         _upload_jobs[job_id]["status"] = "extracting"
@@ -298,7 +301,8 @@ def query_facts(req: QueryRequest):
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    max_pages: Optional[int] = Form(None)
+    max_pages: Optional[int] = Form(None),
+    session_id: Optional[str] = Form(None)
 ):
     """Uploads any PDF file and runs the full ingestion pipeline asynchronously.
     Schema-free: the fact extractor discovers structure from document content, no hardcoding."""
@@ -320,7 +324,7 @@ async def upload_document(
 
     # Run pipeline in background thread so upload returns immediately
     def _run():
-        process_document_pipeline(dest_path, max_pages=max_pages, job_id=job_id)
+        process_document_pipeline(dest_path, max_pages=max_pages, job_id=job_id, session_id=session_id)
 
     background_tasks.add_task(_run)
 
@@ -334,6 +338,15 @@ def upload_status(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+@app.delete("/api/session/{session_id}")
+@app.post("/api/session/{session_id}")
+def cleanup_session(session_id: str):
+    """Cleans up all documents and extracted knowledge uploaded during this session.
+    Supports both DELETE and POST (for navigator.sendBeacon on tab close)."""
+    count = storage.delete_session_documents(session_id)
+    return {"deleted_documents": count, "session_id": session_id}
 
 
 # =========================================================================== #

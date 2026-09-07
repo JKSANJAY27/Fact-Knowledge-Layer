@@ -318,12 +318,14 @@ class FactRetriever:
                 confidence_note="Abstained: Zero grounded facts found in storage."
             )
 
-        # 3. Retrieve cross-document reconciliations
+        # 3. Retrieve cross-document reconciliations — ONLY between facts both in the retrieved set
         fact_ids = {f.fact_id for f in retrieved_facts}
         all_rels = storage.list_relationships(limit=200)
+        # Strict filter: BOTH fact_a AND fact_b must be in the retrieved set.
+        # This prevents off-topic relationships (e.g. GDP reconciliation appearing for a Delhivery query).
         related_rels = [
             r for r in all_rels
-            if r.fact_a_id in fact_ids or r.fact_b_id in fact_ids
+            if r.fact_a_id in fact_ids and r.fact_b_id in fact_ids
         ]
 
         # 4. Prepare context citations
@@ -350,36 +352,45 @@ class FactRetriever:
                 f"Quote: \"{f.source_pointer.quoted_text}\""
             )
 
+        # Build structured reconciliation context (type + brief why, not raw DB text)
         rel_context_lines = []
-        for r in related_rels[:5]:
-            rel_context_lines.append(
-                f"- Relationship: {r.relation_type} ({r.explanation})"
-            )
+        for r in related_rels[:4]:
+            rtype = r.relation_type
+            expl = r.explanation or ""
+            # Summarize concisely — tell the LLM the *type* and *dimension of difference*
+            if rtype == "CORROBORATED":
+                rel_context_lines.append(f"- CORROBORATED: Two documents agree on this metric.")
+            elif rtype == "CONTRADICTED":
+                rel_context_lines.append(f"- CONTRADICTED: Documents report different values for the same metric ({r.difference_field or 'value'} differs).")
+            elif rtype == "CONTEXTUAL_DIFFERENCE":
+                dim = r.difference_field or "context"
+                rel_context_lines.append(f"- CONTEXTUAL_DIFFERENCE ({dim}): The values differ because they describe different {dim}s (e.g. different fiscal periods, reporting scopes, or segments) — not a contradiction.")
 
         rag_prompt = f"""You are an expert financial analyst and conversational AI assistant.
-A user has asked a specific question regarding institutional financial filings and macroeconomic reports.
-Your task is to provide a coherent, articulate, well-structured answer in 1 to 3 natural paragraphs, directly answering what was asked.
+A user has asked a question about institutional financial filings and macroeconomic reports.
+Your task: answer the user's SPECIFIC question concisely in 1-3 natural paragraphs.
 
-WRITING RULES:
-1. Directly answer the user's question in the very first sentence.
-2. Write in complete, professional, natural English sentences. Do NOT output a mechanical list of raw database fields.
-3. Seamlessly weave the numbers into the narrative, referencing the source document name and page number in parentheses, e.g. (Delhivery Q4 Earnings Presentation, p. 5) or (India Economic Survey 2024-25, p. 14).
-4. Address cross-document reconciliations naturally:
-   - If documents corroborate each other (e.g. GDP growth of 6.4%-6.5% across Economic Survey and IMF), explicitly note that the figure is cross-verified across multiple filings.
-   - If there is a contradiction or contextual difference (e.g. FY22 vs FY24 revenue, consolidated vs standalone, or different measurement units), explain the nuance clearly to the user.
-5. If the user asks for an overview (e.g. "explain about Delhivery"), provide an articulate, executive summary covering their business scale, revenues, margins/EBITDA, shipments, and network reach based on the facts.
-6. If the user asks about an ambiguous measurement basis or missing units (e.g. Economic Survey tables lacking explicit units), explain clearly that while reported figures exist, certain source tables lack explicit column unit indicators, which is why the system explicitly logged an extraction abstention rather than speculating.
-7. NEVER hallucinate or invent any numbers not present in the verified facts below.
+CRITICAL WRITING RULES — READ CAREFULLY:
+1. Answer the user's specific question DIRECTLY in the first sentence. Do not preamble.
+2. Write in complete, professional English sentences — never output raw database field names or symbols like "|", "Fact 1]", "Entity:", etc.
+3. Only include information DIRECTLY relevant to what the user asked. Do not dump everything from the facts.
+4. Cite sources inline as (Document Short Name, p. X) — e.g. (Annual Report FY24, p. 2) or (Economic Survey, p. 14).
+5. When multiple documents confirm the same figure, briefly note the cross-verification: e.g. "This is corroborated across both the Economic Survey (p. 14) and the IMF Article IV (p. 5)."
+6. When documents differ (different periods, scopes, or reporting bases), explain WHY they differ in one natural sentence — e.g. "The Q4 Earnings Presentation (p. 6) reports a standalone segment figure of ₹5 Cr, while the Annual Report (p. 2) shows consolidated revenue of ₹8,142 Cr — these differ in reporting scope, not in factual accuracy."
+7. NEVER copy or quote raw reconciliation descriptions verbatim. Translate them into readable English.
+8. If the question is about an overview (e.g. "explain Delhivery"), provide an executive summary: business scale, revenue, EBITDA, shipments, network.
+9. NEVER invent, estimate, or hallucinate numbers. If a figure is not in the facts below, say it is not available.
+10. Keep the total answer under 250 words unless the question is explicitly a broad overview.
 
-EVIDENCE (VERIFIED ATOMIC FACTS):
+VERIFIED ATOMIC FACTS (use these ONLY):
 {chr(10).join(context_lines)}
 
-EVIDENCE (CROSS-DOCUMENT RECONCILIATIONS):
-{chr(10).join(rel_context_lines) if rel_context_lines else "None recorded"}
+CROSS-DOCUMENT RECONCILIATIONS (context for interpretation, do NOT quote verbatim):
+{chr(10).join(rel_context_lines) if rel_context_lines else "No reconciliations found for this set of facts."}
 
 USER QUESTION: {request.query}
 
-STRUCTURED, NATURAL ANSWER:"""
+ANSWER (natural, concise, directly addressing the question):"""
 
         # 5. Call LLM for Grounded Answer Synthesis with Automatic Model Cascade
         answer_text = None
@@ -489,7 +500,7 @@ STRUCTURED, NATURAL ANSWER:"""
         facts: List[AtomicFact],
         rels: List[Any]
     ) -> str:
-        """Deterministic fallback synthesizer written in readable, natural financial prose."""
+        """Deterministic fallback synthesizer — produces natural financial prose when LLM is unavailable."""
         if not facts:
             return (
                 "No verified atomic facts were found in the indexed documents matching your query. "
@@ -498,30 +509,44 @@ STRUCTURED, NATURAL ANSWER:"""
             )
 
         lead = facts[0]
+        doc_short = lead.source_pointer.document_name.replace(".pdf", "").replace("-", " ")
         sentences = [
-            f"Based on verified institutional filings, {lead.entity} reported {lead.metric.lower()} "
-            f"of {lead.raw_value} {lead.unit} for {lead.temporal_context.canonical_period} "
-            f"({lead.source_pointer.document_name}, p. {lead.source_pointer.page_number})."
+            f"Based on verified institutional filings, {lead.entity} reported "
+            f"{lead.metric.lower()} of {lead.raw_value} {lead.unit} "
+            f"for {lead.temporal_context.canonical_period} ({doc_short}, p. {lead.source_pointer.page_number})."
         ]
 
+        # Add supporting facts naturally (max 3 additional)
         if len(facts) > 1:
-            details = []
             for f in facts[1:4]:
-                details.append(
-                    f"{f.metric.lower()} of {f.raw_value} {f.unit} for {f.temporal_context.canonical_period} "
-                    f"({f.source_pointer.document_name}, p. {f.source_pointer.page_number})"
+                d = f.source_pointer.document_name.replace(".pdf", "").replace("-", " ")
+                sentences.append(
+                    f"{f.entity} also recorded {f.metric.lower()} of {f.raw_value} {f.unit} "
+                    f"({d}, p. {f.source_pointer.page_number})."
                 )
-            sentences.append(f"Additional verified figures include {'; and '.join(details)}.")
 
+        # Add reconciliation insight as a single clean sentence, NOT as raw database text
         if rels:
-            sentences.append("\n\nCross-Document Analysis:")
-            for r in rels[:2]:
-                if r.relation_type == "CORROBORATED":
-                    sentences.append(f"• Corroboration: {r.explanation}")
-                elif r.relation_type == "CONTRADICTED":
-                    sentences.append(f"• Discrepancy: {r.explanation}")
-                elif r.relation_type == "CONTEXTUAL_DIFFERENCE":
-                    sentences.append(f"• Context Nuance: {r.explanation}")
+            contradictions = [r for r in rels if r.relation_type == "CONTRADICTED"]
+            contextuals = [r for r in rels if r.relation_type == "CONTEXTUAL_DIFFERENCE"]
+            corroborated = [r for r in rels if r.relation_type == "CORROBORATED"]
+
+            if corroborated:
+                sentences.append(
+                    "These figures are corroborated across multiple source documents."
+                )
+            elif contradictions:
+                dim = contradictions[0].difference_field or "value"
+                sentences.append(
+                    f"Note: Some documents report differing {dim}s for this metric — "
+                    "this likely reflects distinct reporting periods or corporate scopes rather than a data error."
+                )
+            elif contextuals:
+                dim = contextuals[0].difference_field or "context"
+                sentences.append(
+                    f"The figures above differ in {dim} — they are contextually different measurements "
+                    "(e.g. different fiscal periods or reporting scopes), not contradictions."
+                )
 
         return " ".join(sentences)
 

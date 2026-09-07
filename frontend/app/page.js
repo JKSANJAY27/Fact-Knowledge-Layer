@@ -101,6 +101,32 @@ export default function Home() {
   const uploadJobRef = useRef(null);
   const pollRef = useRef(null);
 
+  // ── Session ID for temporary evaluator uploads
+  const [sessionId, setSessionId] = useState(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      let sid = sessionStorage.getItem("fkl_session_id");
+      if (!sid) {
+        sid = "sess_" + Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+        sessionStorage.setItem("fkl_session_id", sid);
+      }
+      setSessionId(sid);
+    }
+  }, []);
+
+  // ── Auto-cleanup uploaded session docs on tab/window close
+  useEffect(() => {
+    if (!sessionId) return;
+    const cleanup = () => {
+      try {
+        navigator.sendBeacon(`/api/session/${sessionId}`, new Blob([], { type: "text/plain" }));
+      } catch (_) {}
+    };
+    window.addEventListener("beforeunload", cleanup);
+    return () => window.removeEventListener("beforeunload", cleanup);
+  }, [sessionId]);
+
   // ── Fetch stats + docs on mount
   useEffect(() => {
     refreshStats();
@@ -227,6 +253,9 @@ export default function Home() {
 
     const fd = new FormData();
     fd.append("file", file);
+    if (sessionId) {
+      fd.append("session_id", sessionId);
+    }
 
     try {
       const res = await fetch("/api/documents/upload", { method: "POST", body: fd });
@@ -485,7 +514,7 @@ export default function Home() {
               <div className="upload-text">
                 {uploading ? "Processing…" : "Drop PDF here or click to browse"}
               </div>
-              <div className="upload-hint">Any document — schema-free ingestion</div>
+              <div className="upload-hint">Schema-free · Session-scoped (auto-removed on tab close)</div>
             </div>
             {(uploadStatus || uploading) && (
               <>

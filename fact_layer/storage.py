@@ -66,9 +66,16 @@ class FactStorage:
                 sha256 TEXT UNIQUE NOT NULL,
                 page_count INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
-                status TEXT NOT NULL
+                status TEXT NOT NULL,
+                session_id TEXT
             );
             """)
+
+            # Safe migration for existing databases
+            try:
+                cursor.execute("ALTER TABLE documents ADD COLUMN session_id TEXT;")
+            except sqlite3.OperationalError:
+                pass
 
             # Pages table
             cursor.execute("""
@@ -198,10 +205,70 @@ class FactStorage:
     def add_document(self, doc: DocumentRecord):
         with self._get_connection() as conn:
             conn.execute("""
-            INSERT OR REPLACE INTO documents (document_id, filename, file_path, sha256, page_count, created_at, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (doc.document_id, doc.filename, doc.file_path, doc.sha256, doc.page_count, doc.created_at, doc.status))
+            INSERT OR REPLACE INTO documents (document_id, filename, file_path, sha256, page_count, created_at, status, session_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (doc.document_id, doc.filename, doc.file_path, doc.sha256, doc.page_count, doc.created_at, doc.status, doc.session_id))
             conn.commit()
+
+    def set_document_session(self, document_id: str, session_id: Optional[str]):
+        """Associates an existing document with a session."""
+        with self._get_connection() as conn:
+            conn.execute("UPDATE documents SET session_id = ? WHERE document_id = ?", (session_id, document_id))
+            conn.commit()
+
+    def delete_document(self, document_id: str) -> bool:
+        """Deletes a single document, its facts, relationships, blocks, pages, failures, and physical files."""
+        with self._get_connection() as conn:
+            doc_row = conn.execute("SELECT * FROM documents WHERE document_id = ?", (document_id,)).fetchone()
+            if not doc_row:
+                return False
+            file_path_str = doc_row["file_path"]
+
+            # Delete relationships referencing facts in this doc
+            conn.execute("""
+                DELETE FROM relationships 
+                WHERE fact_a_id IN (SELECT fact_id FROM facts WHERE document_id = ?)
+                   OR fact_b_id IN (SELECT fact_id FROM facts WHERE document_id = ?)
+            """, (document_id, document_id))
+
+            # Delete failures, facts, blocks, pages, document
+            conn.execute("DELETE FROM failures WHERE document_id = ?", (document_id,))
+            conn.execute("DELETE FROM facts WHERE document_id = ?", (document_id,))
+            conn.execute("DELETE FROM blocks WHERE document_id = ?", (document_id,))
+            conn.execute("DELETE FROM pages WHERE document_id = ?", (document_id,))
+            conn.execute("DELETE FROM documents WHERE document_id = ?", (document_id,))
+            conn.commit()
+
+        # Delete physical files
+        try:
+            p = Path(file_path_str)
+            if p.exists() and "uploads" in str(p).lower():
+                p.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        # Delete page images
+        page_dir = DATA_DIR / "pages"
+        if page_dir.exists():
+            for img in page_dir.glob(f"{document_id}_p*.png"):
+                try:
+                    img.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        return True
+
+    def delete_session_documents(self, session_id: str) -> int:
+        """Deletes all documents (and cascaded data/files) for a given session_id."""
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT document_id FROM documents WHERE session_id = ?", (session_id,)).fetchall()
+            doc_ids = [r["document_id"] for r in rows]
+
+        deleted_count = 0
+        for doc_id in doc_ids:
+            if self.delete_document(doc_id):
+                deleted_count += 1
+        return deleted_count
 
     def _row_to_document(self, row: sqlite3.Row, conn: sqlite3.Connection) -> DocumentRecord:
         doc_id = row["document_id"]
@@ -212,6 +279,7 @@ class FactStorage:
             WHERE f.document_id = ?
         """, (doc_id,)).fetchone()[0]
         failure_count = conn.execute("SELECT COUNT(*) FROM failures WHERE document_id = ?", (doc_id,)).fetchone()[0]
+        session_id = row["session_id"] if "session_id" in row.keys() else None
 
         return DocumentRecord(
             document_id=row["document_id"],
@@ -219,6 +287,7 @@ class FactStorage:
             file_path=row["file_path"],
             sha256=row["sha256"],
             page_count=row["page_count"],
+            session_id=session_id,
             created_at=row["created_at"],
             status=row["status"],
             fact_count=fact_count,

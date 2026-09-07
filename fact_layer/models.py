@@ -130,6 +130,7 @@ class DocumentRecord(BaseModel):
     file_path: str
     sha256: str
     page_count: int
+    session_id: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
     status: str = "indexed"
     fact_count: int = 0
