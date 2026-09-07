@@ -60,6 +60,27 @@ if not PDFS_DIR.exists():
 app.mount("/static/pdfs", StaticFiles(directory=str(PDFS_DIR)), name="pdfs")
 
 
+@app.on_event("startup")
+def startup_seed_check():
+    """Ensure starter PDFs are copied to PDFS_DIR and ingested if database is empty."""
+    import threading
+    # Copy starter PDFs to PDFS_DIR so citation viewer can immediately serve them
+    if STARTER_DATASETS_DIR.exists():
+        for pdf_path in STARTER_DATASETS_DIR.glob("**/*.pdf"):
+            _copy_pdf_for_serving(pdf_path)
+
+    stats = storage.get_stats()
+    if stats["total_documents"] == 0:
+        def _bg_seed():
+            for pdf_path in sorted(STARTER_DATASETS_DIR.glob("**/*.pdf")):
+                try:
+                    process_document_pipeline(pdf_path)
+                except Exception as e:
+                    print(f"Startup ingestion error on {pdf_path.name}: {e}")
+        t = threading.Thread(target=_bg_seed, daemon=True)
+        t.start()
+
+
 # --------------------------------------------------------------------------- #
 # In-memory job tracker for upload progress
 # --------------------------------------------------------------------------- #

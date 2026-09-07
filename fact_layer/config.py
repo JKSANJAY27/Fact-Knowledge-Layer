@@ -13,6 +13,11 @@ env_vars = dotenv_values(ENV_PATH) if ENV_PATH.exists() else {}
 GEMINI_API_KEY = env_vars.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = env_vars.get("GEMINI_MODEL", "gemini-flash-latest")
 
+# Langfuse Observability & Evals
+LANGFUSE_SECRET_KEY = env_vars.get("LANGFUSE_SECRET_KEY") or os.environ.get("LANGFUSE_SECRET_KEY", "sk-lf-cd965f2e-d535-4f85-a847-1e0e65ad6a9c")
+LANGFUSE_PUBLIC_KEY = env_vars.get("LANGFUSE_PUBLIC_KEY") or os.environ.get("LANGFUSE_PUBLIC_KEY", "pk-lf-5446c269-cfb0-4b7c-94ea-5c4b55849348")
+LANGFUSE_BASE_URL = env_vars.get("LANGFUSE_BASE_URL") or os.environ.get("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
+
 # Storage Paths
 DATA_DIR = PROJECT_ROOT / "data"
 DB_PATH = DATA_DIR / "fact_layer.sqlite3"

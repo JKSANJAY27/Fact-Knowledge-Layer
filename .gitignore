@@ -12,7 +12,8 @@ venv/
 .pytest_cache/
 
 # SQLite database (data directory)
-data/*.sqlite3
+data/fact_layer.sqlite3
+!data/seed_data.sqlite3
 data/pages/
 data/uploads/
 data/pdfs/

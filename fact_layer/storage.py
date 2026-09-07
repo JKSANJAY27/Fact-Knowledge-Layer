@@ -22,7 +22,16 @@ from fact_layer.models import (
 
 class FactStorage:
     def __init__(self, db_path: Optional[Path] = None):
+        import shutil
         self.db_path = db_path or DB_PATH
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # If database file doesn't exist or is 0 bytes, auto-seed from seed_data.sqlite3 if present
+        seed_path = self.db_path.parent / "seed_data.sqlite3"
+        if (not self.db_path.exists() or self.db_path.stat().st_size == 0) and seed_path.exists():
+            try:
+                shutil.copy2(seed_path, self.db_path)
+            except Exception:
+                pass
         self._init_db()
         self._embedder = None
 
