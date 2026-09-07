@@ -314,17 +314,95 @@ export default function Home() {
       abstention_reason = "",
     } = data;
 
-    // Detect answer type from content / metadata
-    const hasCorroboration = relationships?.some((r) =>
-      r.relation_type?.toLowerCase() === "corroborated"
-    );
-    const hasContradiction = relationships?.some((r) =>
+    // Helper to render text with inline clickable citation pills
+    const renderAnswerText = (text = "") => {
+      if (!text) return null;
+
+      // Matches citations inside parentheses: (doc_name, p. 5) or (Annual Report FY24, p. 2)
+      const citationRegex = /\(([^()\n]*?(?:p\.|page|Page)\s*(\d+)[^()\n]*?)\)/g;
+      const elements = [];
+      let lastIndex = 0;
+      let match;
+
+      while ((match = citationRegex.exec(text)) !== null) {
+        const matchStart = match.index;
+        const matchEnd = match.index + match[0].length;
+        const innerContent = match[1];
+        const pageNum = parseInt(match[2], 10);
+
+        if (matchStart > lastIndex) {
+          elements.push(text.substring(lastIndex, matchStart));
+        }
+
+        const innerLower = innerContent.toLowerCase();
+
+        // Match citation from citations array
+        let targetDoc = citations.find((c) => {
+          if (c.page_number !== pageNum) return false;
+          const fn = (c.filename || "").toLowerCase();
+          return innerLower.split(/[\s,._-]+/).some((tok) => tok.length > 2 && fn.includes(tok));
+        });
+
+        if (!targetDoc) {
+          targetDoc = citations.find((c) => c.page_number === pageNum);
+        }
+
+        if (!targetDoc) {
+          targetDoc = citations.find((c) => {
+            const fn = (c.filename || "").toLowerCase();
+            return innerLower.split(/[\s,._-]+/).some((tok) => tok.length > 3 && fn.includes(tok));
+          });
+        }
+
+        if (!targetDoc) {
+          const found = documents.find((d) => {
+            const fn = (d.filename || "").toLowerCase();
+            return innerLower.split(/[\s,._-]+/).some((tok) => tok.length > 3 && fn.includes(tok));
+          });
+          if (found) targetDoc = { filename: found.filename, page_number: pageNum };
+        }
+
+        const filename = targetDoc?.filename || (innerContent.replace(/,\s*p\..*/i, "").trim().replace(/\s+/g, "-") + ".pdf");
+        const page = targetDoc?.page_number || pageNum || 1;
+        const shortName = shortFilename(filename);
+
+        elements.push(
+          <button
+            key={`cite-${matchStart}`}
+            className="inline-citation-btn"
+            onClick={() => openPdf(filename, page, shortName)}
+            title={`Open ${filename} at page ${page}`}
+          >
+            <span className="inline-chip-icon">📄</span>
+            <span>{shortName}</span>
+            <span className="inline-chip-page">p.{page}</span>
+          </button>
+        );
+
+        lastIndex = matchEnd;
+      }
+
+      if (lastIndex < text.length) {
+        elements.push(text.substring(lastIndex));
+      }
+
+      return elements;
+    };
+
+    const hasInlineCitations = /\(([^()\n]*?(?:p\.|page|Page)\s*(\d+)[^()\n]*?)\)/i.test(answer);
+
+    // Detect answer type from displayed relationships to ensure header matches content
+    const displayedRels = relationships?.slice(0, 3) || [];
+    const hasAbstention = abstained || failures?.length > 0;
+    const hasContradiction = displayedRels.some((r) =>
       r.relation_type?.toLowerCase() === "contradicted"
     );
-    const hasContextual = relationships?.some((r) =>
-      r.relation_type?.toLowerCase() === "contextual"
+    const hasContextual = displayedRels.some((r) =>
+      r.relation_type?.toLowerCase()?.includes("contextual")
     );
-    const hasAbstention = abstained || failures?.length > 0;
+    const hasCorroboration = displayedRels.some((r) =>
+      r.relation_type?.toLowerCase() === "corroborated"
+    );
 
     const sectionClass = hasAbstention
       ? "section-abstention"
@@ -363,8 +441,10 @@ export default function Home() {
         <div className="msg-avatar avatar-assistant">FK</div>
         <div className="bubble-wrap">
           <div className="chat-bubble bubble-assistant">
-            {/* Main answer text */}
-            <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}>{answer}</div>
+            {/* Main answer text with inline clickable citations */}
+            <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.8 }}>
+              {renderAnswerText(answer)}
+            </div>
 
             {/* Relationship type banner */}
             {sectionLabel && (
@@ -380,9 +460,9 @@ export default function Home() {
                 </div>
 
                 {/* Relationship details */}
-                {relationships?.length > 0 && (
+                {displayedRels.length > 0 && (
                   <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)", marginTop: "0.3rem" }}>
-                    {relationships.slice(0, 3).map((r, ri) => {
+                    {displayedRels.map((r, ri) => {
                       const b = relationBadge(r.relation_type);
                       return (
                         <div key={ri} style={{ marginBottom: "0.25rem", display: "flex", gap: "0.4rem", alignItems: "flex-start" }}>
@@ -413,8 +493,8 @@ export default function Home() {
               </div>
             )}
 
-            {/* Citations */}
-            {citations?.length > 0 && (
+            {/* Bottom Citations (shown only if not already cited inline) */}
+            {!hasInlineCitations && citations?.length > 0 && (
               <div className="citations-row">
                 {citations.slice(0, 8).map((c, ci) => {
                   const short = shortFilename(c.filename || c.document_id || "");

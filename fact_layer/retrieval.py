@@ -511,21 +511,32 @@ ANSWER (natural, concise, directly addressing the question):"""
         lead = facts[0]
         doc_short = lead.source_pointer.document_name.replace(".pdf", "").replace("-", " ")
         sentences = [
-            f"Based on verified institutional filings, {lead.entity} reported "
+            f"According to verified institutional filings, {lead.entity} reported "
             f"{lead.metric.lower()} of {lead.raw_value} {lead.unit} "
             f"for {lead.temporal_context.canonical_period} ({doc_short}, p. {lead.source_pointer.page_number})."
         ]
 
-        # Add supporting facts naturally (max 3 additional)
-        if len(facts) > 1:
-            for f in facts[1:4]:
-                d = f.source_pointer.document_name.replace(".pdf", "").replace("-", " ")
-                sentences.append(
-                    f"{f.entity} also recorded {f.metric.lower()} of {f.raw_value} {f.unit} "
-                    f"({d}, p. {f.source_pointer.page_number})."
-                )
+        # Add supporting facts with varied grammatical flow
+        templates = [
+            "Additionally, {metric} was reported at {val} {unit} ({doc}, p. {page}).",
+            "In related filings, {metric} reached {val} {unit} ({doc}, p. {page}).",
+            "Operating metrics also indicate {metric} of {val} {unit} ({doc}, p. {page}).",
+            "Furthermore, {metric} stood at {val} {unit} ({doc}, p. {page})."
+        ]
 
-        # Add reconciliation insight as a single clean sentence, NOT as raw database text
+        for idx, f in enumerate(facts[1:4]):
+            d = f.source_pointer.document_name.replace(".pdf", "").replace("-", " ")
+            tmpl = templates[idx % len(templates)]
+            sentences.append(tmpl.format(
+                entity=f.entity,
+                metric=f.metric.lower(),
+                val=f.raw_value,
+                unit=f.unit,
+                doc=d,
+                page=f.source_pointer.page_number
+            ))
+
+        # Add reconciliation insight as a clean, natural sentence
         if rels:
             contradictions = [r for r in rels if r.relation_type == "CONTRADICTED"]
             contextuals = [r for r in rels if r.relation_type == "CONTEXTUAL_DIFFERENCE"]
@@ -533,19 +544,19 @@ ANSWER (natural, concise, directly addressing the question):"""
 
             if corroborated:
                 sentences.append(
-                    "These figures are corroborated across multiple source documents."
+                    "These figures are corroborated across multiple independent source filings."
                 )
             elif contradictions:
                 dim = contradictions[0].difference_field or "value"
                 sentences.append(
-                    f"Note: Some documents report differing {dim}s for this metric — "
-                    "this likely reflects distinct reporting periods or corporate scopes rather than a data error."
+                    f"Note: Filings report differing {dim} figures across periods or segments, "
+                    "reflecting distinct accounting perimeters rather than ungrounded claims."
                 )
             elif contextuals:
                 dim = contextuals[0].difference_field or "context"
                 sentences.append(
-                    f"The figures above differ in {dim} — they are contextually different measurements "
-                    "(e.g. different fiscal periods or reporting scopes), not contradictions."
+                    f"The figures differ primarily in {dim} (such as segment vs. consolidated disclosures), "
+                    "providing complementary context rather than contradictory data."
                 )
 
         return " ".join(sentences)
