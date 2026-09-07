@@ -11,7 +11,7 @@ env_vars = dotenv_values(ENV_PATH) if ENV_PATH.exists() else {}
 
 # Priority: explicitly specified in project .env, then os.environ
 GEMINI_API_KEY = env_vars.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = env_vars.get("GEMINI_MODEL", "gemini-flash-latest")
+GEMINI_MODEL = env_vars.get("GEMINI_MODEL", "gemini-flash-lite-latest")
 
 # Langfuse Observability & Evals
 LANGFUSE_SECRET_KEY = env_vars.get("LANGFUSE_SECRET_KEY") or os.environ.get("LANGFUSE_SECRET_KEY", "sk-lf-cd965f2e-d535-4f85-a847-1e0e65ad6a9c")

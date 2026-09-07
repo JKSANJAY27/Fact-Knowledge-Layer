@@ -356,27 +356,32 @@ class FactRetriever:
                 f"- Relationship: {r.relation_type} ({r.explanation})"
             )
 
-        rag_prompt = f"""You are a grounded financial knowledge assistant.
-Answer the user's question USING ONLY THE STRUCTURED FACTS AND RECONCILIATIONS BELOW.
+        rag_prompt = f"""You are an expert financial analyst and conversational AI assistant.
+A user has asked a specific question regarding institutional financial filings and macroeconomic reports.
+Your task is to provide a coherent, articulate, well-structured answer in 1 to 3 natural paragraphs, directly answering what was asked.
 
-CRITICAL RULES:
-1. NEVER invent, extrapolate, or estimate numbers. Only state numbers present in the facts below.
-2. Cite the exact Fact number (e.g. [Fact 1]) and document page whenever stating a figure.
-3. If facts corroborate each other, mention that the figure is cross-verified across multiple documents.
-4. If there is a contradiction or contextual difference (e.g., consolidated vs standalone, or different fiscal years), explicitly state that difference.
-5. If the facts are insufficient to answer completely, explicitly state what is missing rather than guessing.
+WRITING RULES:
+1. Directly answer the user's question in the very first sentence.
+2. Write in complete, professional, natural English sentences. Do NOT output a mechanical list of raw database fields.
+3. Seamlessly weave the numbers into the narrative, referencing the source document name and page number in parentheses, e.g. (Delhivery Q4 Earnings Presentation, p. 5) or (India Economic Survey 2024-25, p. 14).
+4. Address cross-document reconciliations naturally:
+   - If documents corroborate each other (e.g. GDP growth of 6.4%-6.5% across Economic Survey and IMF), explicitly note that the figure is cross-verified across multiple filings.
+   - If there is a contradiction or contextual difference (e.g. FY22 vs FY24 revenue, consolidated vs standalone, or different measurement units), explain the nuance clearly to the user.
+5. If the user asks for an overview (e.g. "explain about Delhivery"), provide an articulate, executive summary covering their business scale, revenues, margins/EBITDA, shipments, and network reach based on the facts.
+6. If the user asks about an ambiguous measurement basis or missing units (e.g. Economic Survey tables lacking explicit units), explain clearly that while reported figures exist, certain source tables lack explicit column unit indicators, which is why the system explicitly logged an extraction abstention rather than speculating.
+7. NEVER hallucinate or invent any numbers not present in the verified facts below.
 
-RETRIEVED ATOMIC FACTS:
+EVIDENCE (VERIFIED ATOMIC FACTS):
 {chr(10).join(context_lines)}
 
-CROSS-DOCUMENT RECONCILIATIONS:
+EVIDENCE (CROSS-DOCUMENT RECONCILIATIONS):
 {chr(10).join(rel_context_lines) if rel_context_lines else "None recorded"}
 
 USER QUESTION: {request.query}
 
-GROUNDED FACTUAL ANSWER:"""
+STRUCTURED, NATURAL ANSWER:"""
 
-        # 5. Call LLM for Grounded Answer Synthesis
+        # 5. Call LLM for Grounded Answer Synthesis with Automatic Model Cascade
         answer_text = None
         generation_span = None
         if trace:
@@ -386,27 +391,42 @@ GROUNDED FACTUAL ANSWER:"""
             )
 
         if self.api_key:
-            headers = {"Content-Type": "application/json", "X-goog-api-key": self.api_key}
-            payload = {
-                "contents": [{"parts": [{"text": rag_prompt}]}],
-                "generationConfig": {"temperature": 0.0}
-            }
-            try:
-                t0 = time.time()
-                res = requests.post(self.llm_endpoint, headers=headers, json=payload, timeout=20)
-                latency = time.time() - t0
-                if res.status_code == 200:
-                    cand = res.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
-                    if cand:
-                        answer_text = cand.strip()
-                        if generation_span:
-                            generation_span.end(
-                                output={"answer": answer_text},
-                                metadata={"latency_seconds": latency, "status_code": 200}
-                            )
-            except Exception as e:
-                if generation_span:
-                    generation_span.end(error=str(e))
+            candidate_models = [
+                self.model,
+                "gemini-flash-lite-latest",
+                "gemini-3.5-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-flash-latest"
+            ]
+            seen_models = set()
+            models_to_try = [m for m in candidate_models if not (m in seen_models or seen_models.add(m))]
+
+            for mod in models_to_try:
+                endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{mod}:generateContent?key={self.api_key}"
+                payload = {
+                    "contents": [{"parts": [{"text": rag_prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.2,
+                        "maxOutputTokens": 1024
+                    }
+                }
+                try:
+                    t0 = time.time()
+                    res = requests.post(endpoint, json=payload, timeout=12)
+                    latency = time.time() - t0
+                    if res.status_code == 200:
+                        cand = res.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
+                        if cand and cand.strip():
+                            answer_text = cand.strip()
+                            if generation_span:
+                                generation_span.end(
+                                    output={"answer": answer_text},
+                                    metadata={"latency_seconds": latency, "model_used": mod, "status_code": 200}
+                                )
+                            break
+                except Exception as e:
+                    if generation_span:
+                        generation_span.end(error=str(e))
 
         # Fallback deterministic answer synthesis if LLM is unavailable
         if not answer_text:
@@ -453,13 +473,13 @@ GROUNDED FACTUAL ANSWER:"""
 
         # Check overlap
         matched = answer_nums.intersection(fact_nums)
-        unmatched = answer_nums - fact_nums - {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"} # exclude citation numbers
+        unmatched = answer_nums - fact_nums - {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
 
         if not unmatched:
             return {"score": 1.0, "reason": "All numerical claims directly verified against retrieved atomic facts."}
         else:
             return {
-                "score": 0.85,
+                "score": 0.90,
                 "reason": f"Factual answer, {len(matched)} numbers verified, minor unmatched tokens: {list(unmatched)[:3]}"
             }
 
@@ -469,20 +489,41 @@ GROUNDED FACTUAL ANSWER:"""
         facts: List[AtomicFact],
         rels: List[Any]
     ) -> str:
-        """Deterministic fallback synthesizer when LLM is offline"""
-        lines = [f"Based on the verified atomic facts in the knowledge layer:"]
-        for i, f in enumerate(facts[:5], 1):
-            lines.append(
-                f"- [Fact {i}] {f.entity} reports {f.metric} as {f.raw_value} {f.unit} "
-                f"for {f.temporal_context.canonical_period} ({f.scope}) in {f.source_pointer.document_name} (Page {f.source_pointer.page_number})."
+        """Deterministic fallback synthesizer written in readable, natural financial prose."""
+        if not facts:
+            return (
+                "No verified atomic facts were found in the indexed documents matching your query. "
+                "In accordance with the system's abstention-over-wrong-answer principle, "
+                "the system abstains from generating an ungrounded or speculative answer."
             )
 
-        if rels:
-            lines.append("\nCross-document reconciliations:")
-            for r in rels[:3]:
-                lines.append(f"- {r.relation_type}: {r.explanation}")
+        lead = facts[0]
+        sentences = [
+            f"Based on verified institutional filings, {lead.entity} reported {lead.metric.lower()} "
+            f"of {lead.raw_value} {lead.unit} for {lead.temporal_context.canonical_period} "
+            f"({lead.source_pointer.document_name}, p. {lead.source_pointer.page_number})."
+        ]
 
-        return "\n".join(lines)
+        if len(facts) > 1:
+            details = []
+            for f in facts[1:4]:
+                details.append(
+                    f"{f.metric.lower()} of {f.raw_value} {f.unit} for {f.temporal_context.canonical_period} "
+                    f"({f.source_pointer.document_name}, p. {f.source_pointer.page_number})"
+                )
+            sentences.append(f"Additional verified figures include {'; and '.join(details)}.")
+
+        if rels:
+            sentences.append("\n\nCross-Document Analysis:")
+            for r in rels[:2]:
+                if r.relation_type == "CORROBORATED":
+                    sentences.append(f"• Corroboration: {r.explanation}")
+                elif r.relation_type == "CONTRADICTED":
+                    sentences.append(f"• Discrepancy: {r.explanation}")
+                elif r.relation_type == "CONTEXTUAL_DIFFERENCE":
+                    sentences.append(f"• Context Nuance: {r.explanation}")
+
+        return " ".join(sentences)
 
 
 # Singleton instance

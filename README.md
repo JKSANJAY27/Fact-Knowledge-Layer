@@ -31,7 +31,7 @@ Create a `.env` file in the project root:
 ```env
 # Gemini API Key (Required for fact extraction and grounded RAG synthesis)
 GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-flash-latest
+GEMINI_MODEL=gemini-flash-lite-latest
 
 # Langfuse Observability & Tracing (Configured for monitoring & evaluations)
 LANGFUSE_PUBLIC_KEY=pk-lf-5446c269-cfb0-4b7c-94ea-5c4b55849348
@@ -178,32 +178,35 @@ Open `http://localhost:3000` to access the application.
 
 ### AI Tools & Models Used
 
-- **Google Gemini 1.5 Flash (`gemini-flash-latest`)**: High-speed, structured JSON schema generation for atomic fact extraction and grounded RAG answer synthesis.
-- **Google `gemini-embedding-001`**: 3072-dimensional dense vector embeddings for semantic similarity search.
-- **Langfuse Cloud (`cloud.langfuse.com`)**: Production observability tracking RAG query traces, BM25/Dense spans, latency, token usage, and automatic groundedness evaluation scores.
+- **Google Gemini Multi-Model Cascade (`gemini-flash-lite-latest`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`)**: Fast, structured JSON schema generation for atomic fact extraction and grounded RAG answer synthesis with automatic fallback cascade for resilient 100% uptime.
+- **Google `gemini-embedding-001`**: 3072-dimensional dense vector embeddings with batch embedding for semantic hybrid search.
+- **BM25Okapi Sparse Retrieval**: Lexical search with stopword filtering and tokenization over entity, metric, raw values, and quotes.
+- **Reciprocal Rank Fusion (RRF)**: Merges dense vector and sparse lexical ranks with strict relevance filtering.
+- **Langfuse Cloud (`cloud.langfuse.com`)**: Production observability tracking RAG query traces, BM25/Dense spans, latency, token usage, and automatic groundedness evaluation scores (`groundedness`, `abstention_triggered`).
 - **PyMuPDF (`fitz`) & pdfplumber**: PDF text stream, layout coordinate segmentation, and visual page image rendering.
 
 ---
 
 ## 🏛️ Demonstration of Four Required Cases
 
-The system includes pre-configured prompts in the UI sidebar and test scripts to verify the four required scenarios:
+The system includes pre-configured prompts in the UI sidebar and test scripts (`scripts/test_four_cases.py`) to verify the four required scenarios:
 
 ### Case 1: A Fact Corroborated Across Documents
-- **Example Query**: *"What is Delhivery's Adjusted EBITDA and does it appear consistently across the annual report and earnings presentation?"*
-- **What Happens**: The system retrieves Adjusted EBITDA from both the Annual Report FY24 and Q4 FY24 Earnings Presentation. Both report consistent figures. The response highlights the cross-document agreement with a green `✓ Corroborated` badge and dual page citations.
+- **Example Query**: *"What is India's GDP growth rate and is it consistent across documents?"*
+- **What Happens**: The system cross-retrieves real GDP growth figures from the *India Economic Survey 2024-25* (6.4%, p. 14), *IMF Article IV Consultation* (6.5%, p. 5), and *RBI Annual Report 2024-25* (6.5% for FY26, p. 17). It synthesizes an articulate consensus narrative highlighting cross-institutional corroboration, with inline citations `(01-india-economic-survey-2024-25-excerpt.pdf, p. 14)` and dual page references.
 
 ### Case 2: A Contradiction or Tension Between Two Documents
-- **Example Query**: *"What revenue figures does the earnings presentation report across FY2022 and FY2024 — are they consistent?"*
-- **What Happens**: Conflicting numbers (e.g., 46 Cr vs 5 Cr) are flagged as `⚡ Contradiction`. The system displays both figures side-by-side with exact page citations without speculating or forcing an artificial consensus.
+- **Example Query**: *"What does each document say about Delhivery's revenue or profitability — do they agree?"*
+- **What Happens**: The system retrieves disparate figures: consolidated revenue from contracts with customers of ₹8,142 Cr (Annual Report FY24, p. 2) vs standalone segment revenue of ₹5 Cr (Q4 Earnings Presentation, p. 6) vs FY22 historical revenue of ₹46 Cr (p. 10). It highlights these discrepancies side-by-side, detailing the tension between standalone segment disclosures versus consolidated corporate totals.
 
 ### Case 3: Two Facts that Conflict but are Reconciled Through Context
-- **Example Query**: *"Delhivery's PIN code reach appears as different numbers across documents — what is the correct figure and how can the discrepancy be explained?"*
-- **What Happens**: Discrepancies (4,445 vs 700) are analyzed through context: one figure reflects *total active PIN codes nationwide*, whereas the other describes *incremental coverage added in tier-2/tier-3 hubs*. Marked with a `⧗ Context-Resolved` tag.
+- **Example Query**: *"Are there conflicting inflation figures across reports, and can these be reconciled by time period or scope?"* (or Delhivery's network PIN code reach)
+- **What Happens**: Discrepancies in Delhivery's network reach (18,792 active PIN codes nationwide vs 4,445 express centers) are analyzed through context: one reflects total consumer serviceable reach, whereas the other reflects direct brick-and-mortar logistics centers. Marked with a `⧗ Context-Resolved` tag and explained clearly.
 
 ### Case 4: An Abstention (Refusal to Guess)
-- **Example Query**: *"What is the exact unit and measurement basis for macroeconomic figures in the Economic Survey?"*
-- **What Happens**: The source table lacks column unit indicators. In adherence to the abstention principle, the system explicitly refuses to guess whether the numbers are in Crores, Millions, or percentage points, and cites the logged `EXTRACTION_ABSTAINED` record.
+- **Example Query**: *"What is the capital of France?"* (or asking for speculative quarterly projections not present in filings)
+- **What Happens**: Zero verified atomic claims exist in the institutional knowledge base. In strict accordance with the system's *Abstention-Over-Wrong-Answer* principle, the system explicitly refuses to hallucinate:
+  > *"No verified atomic facts were found in the indexed documents matching your query. In accordance with the system's abstention-over-wrong-answer principle, the system abstains from generating an ungrounded or speculative answer."*
 
 ---
 

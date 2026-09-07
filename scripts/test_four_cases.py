@@ -1,6 +1,11 @@
 """Quick test of the 4 case example queries against the live knowledge base."""
 import sys, json
 from pathlib import Path
+if sys.stdout.encoding != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
