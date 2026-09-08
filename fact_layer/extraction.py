@@ -423,12 +423,31 @@ Extract atomic claims and record any abstentions according to the instructions. 
                             unit_group = g
                             break
 
-                    # Closest temporal expression
+                    # Closest temporal expression — prefer context AFTER the match first
+                    # (avoids contamination from prior-sentence comparison periods, e.g.
+                    #  "...compared to INR 980 Cr in FY2023. EBITDA reaching INR 225 Crores...")
+                    after_ctx = text[match.start():min(len(text), match.end() + 120)]
+                    before_ctx = text[max(0, match.start() - 80):match.end()]
                     surrounding = text[max(0, match.start() - 100):min(len(text), match.end() + 100)]
-                    temp_expr = "FY2024"
-                    if re.search(r"fy\s*2024|fy24|2023-24", surrounding, re.IGNORECASE):
+
+                    temp_expr = "FY2024"  # safe default for most financial filings
+                    # Step 1: scan FORWARD context for unambiguous period signal
+                    if re.search(r"fy\s*2024|fy24|2023-24", after_ctx, re.IGNORECASE):
                         temp_expr = "FY2024"
-                    elif re.search(r"fy\s*2023|fy23|2022-23", surrounding, re.IGNORECASE):
+                    elif re.search(r"fy\s*2023|fy23|2022-23", after_ctx, re.IGNORECASE):
+                        temp_expr = "FY2023"
+                    elif re.search(r"fy\s*2022|fy22|2021-22", after_ctx, re.IGNORECASE):
+                        temp_expr = "FY2022"
+                    elif re.search(r"q4\s*fy24|q4fy24", after_ctx, re.IGNORECASE):
+                        temp_expr = "Q4_FY2024"
+                    elif re.search(r"q3\s*fy24|q3fy24", after_ctx, re.IGNORECASE):
+                        temp_expr = "Q3_FY2024"
+                    elif re.search(r"2024-25|fy25", after_ctx, re.IGNORECASE):
+                        temp_expr = "FY2025"
+                    # Step 2: only fall back to backward context if forward gave no signal
+                    elif re.search(r"fiscal year 2024|fy\s*2024|fy24|2023-24", before_ctx, re.IGNORECASE):
+                        temp_expr = "FY2024"
+                    elif re.search(r"fy\s*2023|fy23|2022-23", before_ctx, re.IGNORECASE):
                         temp_expr = "FY2023"
                     elif re.search(r"fy\s*2022|fy22|2021-22", surrounding, re.IGNORECASE):
                         temp_expr = "FY2022"
