@@ -118,9 +118,10 @@ class DenseEmbeddingRetriever:
         self.endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
         # In-memory vector cache: fact_id -> List[float]
         self._cache: Dict[str, List[float]] = {}
+        self._api_disabled: bool = False
 
     def _batch_embed(self, texts: List[str]) -> List[Optional[List[float]]]:
-        if not self.api_key or not texts:
+        if not self.api_key or not texts or self._api_disabled:
             return [None] * len(texts)
         try:
             reqs = [
@@ -131,11 +132,13 @@ class DenseEmbeddingRetriever:
                 f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents?key={self.api_key}",
                 headers={"Content-Type": "application/json"},
                 json={"requests": reqs},
-                timeout=15
+                timeout=5
             )
             if res.status_code == 200:
                 raw = res.json().get("embeddings", [])
                 return [r.get("values") for r in raw]
+            elif res.status_code in (401, 403, 400):
+                self._api_disabled = True
         except Exception:
             pass
         return [None] * len(texts)
@@ -193,6 +196,7 @@ class FactRetriever:
         self.llm_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
         self.bm25 = BM25Retriever()
         self.dense = DenseEmbeddingRetriever(self.api_key)
+        self._llm_disabled: bool = False
 
     def retrieve_hybrid_rrf(
         self,
@@ -200,16 +204,58 @@ class FactRetriever:
         entity_filter: Optional[str] = None,
         period_filter: Optional[str] = None,
         top_k: int = 10,
+        session_id: Optional[str] = None,
         trace: Optional[Any] = None
     ) -> List[AtomicFact]:
         all_facts = storage.list_facts()
         if not all_facts:
             return []
 
-        # Apply hard filters if requested
         candidates = all_facts
+
+        # 1. Entity-Aware Filtering & Disambiguation
         if entity_filter:
             candidates = [f for f in candidates if entity_filter.lower() in f.entity.lower()]
+        else:
+            q_lower = query.lower()
+            unique_entities = list(set(f.entity for f in all_facts))
+            matched_entities = []
+            for ent in unique_entities:
+                ent_words = [
+                    w.lower() for w in re.findall(r"[a-zA-Z]+", ent)
+                    if len(w) > 2 and w.lower() not in {"limited", "ltd", "inc", "corp", "technologies", "services", "the", "and", "for", "government", "india", "bank"}
+                ]
+                if any(w in q_lower for w in ent_words):
+                    matched_entities.append(ent)
+
+            if not matched_entities:
+                if any(term in q_lower for term in ["gdp", "economic survey", "union budget", "fiscal deficit", "forex"]):
+                    matched_entities = [e for e in unique_entities if "government" in e.lower() or "india" in e.lower()]
+                elif "rbi" in q_lower or "repo rate" in q_lower:
+                    matched_entities = [e for e in unique_entities if "reserve bank" in e.lower()]
+
+            if matched_entities:
+                candidates = [f for f in candidates if f.entity in matched_entities]
+            elif session_id:
+                # Prioritize facts from documents uploaded in this user session
+                session_docs = [d for d in storage.list_documents() if getattr(d, "session_id", None) == session_id]
+                session_doc_ids = {d.document_id for d in session_docs}
+                session_facts = [f for f in candidates if f.document_id in session_doc_ids]
+                if session_facts:
+                    candidates = session_facts
+            else:
+                # If query asks about an explicit unknown company not in our storage, abstain
+                query_cap_words = re.findall(r"\b([A-Z][a-z]+)\b", query)
+                stop_proper = {"What", "How", "Who", "When", "Where", "Why", "Is", "Was", "Are", "Were", "The", "Does", "Did", "Can", "Could", "Explain", "Give", "Show", "Tell", "Annual", "Report", "Fiscal", "Year", "Total", "Net", "Gross", "Revenue", "Ebitda", "Pat", "Segment"}
+                unknown_targets = [w for w in query_cap_words if w not in stop_proper]
+                if unknown_targets:
+                    matches_any_known = any(
+                        any(t.lower() in ent.lower() for ent in unique_entities)
+                        for t in unknown_targets
+                    )
+                    if not matches_any_known:
+                        return []
+
         if period_filter:
             candidates = [f for f in candidates if period_filter.lower() == f.temporal_context.canonical_period.lower()]
 
@@ -294,6 +340,7 @@ class FactRetriever:
             entity_filter=request.entity_filter,
             period_filter=request.period_filter,
             top_k=request.top_k,
+            session_id=request.session_id,
             trace=trace
         )
 
@@ -401,12 +448,11 @@ ANSWER (natural, concise, directly addressing the question):"""
                 input={"prompt": rag_prompt, "model": self.model}
             )
 
-        if self.api_key:
+        if self.api_key and not self._llm_disabled:
             candidate_models = [
                 self.model,
-                "gemini-flash-lite-latest",
-                "gemini-3.5-flash",
-                "gemini-3.5-flash-lite",
+                "gemini-2.0-flash",
+                "gemini-1.5-flash",
                 "gemini-flash-latest"
             ]
             seen_models = set()
@@ -423,7 +469,7 @@ ANSWER (natural, concise, directly addressing the question):"""
                 }
                 try:
                     t0 = time.time()
-                    res = requests.post(endpoint, json=payload, timeout=12)
+                    res = requests.post(endpoint, json=payload, timeout=6)
                     latency = time.time() - t0
                     if res.status_code == 200:
                         cand = res.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
@@ -435,6 +481,9 @@ ANSWER (natural, concise, directly addressing the question):"""
                                     metadata={"latency_seconds": latency, "model_used": mod, "status_code": 200}
                                 )
                             break
+                    elif res.status_code in (401, 403):
+                        self._llm_disabled = True
+                        break
                 except Exception as e:
                     if generation_span:
                         generation_span.end(error=str(e))

@@ -80,9 +80,8 @@ class ReconciliationEngine:
                 fact_a = facts[i]
                 fact_b = facts[j]
 
-                # Cross-document only: skip pairs from the same document
-                # (same-document duplicates should be handled by deduplication, not reconciliation)
-                if fact_a.document_id == fact_b.document_id:
+                # Skip exact duplicate extractions from the identical block and value
+                if fact_a.document_id == fact_b.document_id and fact_a.block_id == fact_b.block_id and fact_a.raw_value == fact_b.raw_value:
                     continue
 
                 # Step 1: Candidate pair filter (same entity + similar metric)

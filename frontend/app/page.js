@@ -45,6 +45,41 @@ const EXAMPLE_PROMPTS = [
   },
 ];
 
+const NOVACORP_PROMPTS = [
+  {
+    id: "nova-corroborated",
+    caseLabel: "Corroboration",
+    icon: "✓",
+    tagClass: "tag-corroborated",
+    question: "What is NovaCorp's total verified workforce or headcount?",
+    hint: "Corroborated across Page 1 & Page 2 identically as 8,500 full-time employees",
+  },
+  {
+    id: "nova-contextual",
+    caseLabel: "Scope Difference",
+    icon: "⧗",
+    tagClass: "tag-contextual",
+    question: "How does NovaCorp's standalone revenue compare to its consolidated revenue?",
+    hint: "Standalone (₹1,120 Cr) vs Consolidated (₹1,250 Cr) due to foreign subsidiaries",
+  },
+  {
+    id: "nova-variance",
+    caseLabel: "Period Variance",
+    icon: "⚡",
+    tagClass: "tag-contradicted",
+    question: "What was NovaCorp's consolidated revenue for FY2024 compared to FY2023?",
+    hint: "FY2024 (₹1,250 Cr) vs FY2023 (₹980 Cr) — 27.5% YoY expansion",
+  },
+  {
+    id: "nova-abstention",
+    caseLabel: "Abstention",
+    icon: "?",
+    tagClass: "tag-abstention",
+    question: "What is NovaCorp's projected market expansion index?",
+    hint: "Abstains because baseline index unit and methodology were not defined",
+  },
+];
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -103,6 +138,7 @@ export default function Home() {
 
   // ── Session ID for temporary evaluator uploads
   const [sessionId, setSessionId] = useState(null);
+  const [exampleTab, setExampleTab] = useState("preindexed"); // "preindexed" | "novacorp"
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -174,8 +210,8 @@ export default function Home() {
       const res = await fetch("/api/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // API field is 'query' not 'question'
-        body: JSON.stringify({ query: question, top_k: 8 }),
+        // API field is 'query' not 'question', with optional session_id
+        body: JSON.stringify({ query: question, top_k: 8, session_id: sessionId }),
       });
       const raw = await res.json();
       // Normalize API response to internal shape
@@ -553,11 +589,47 @@ export default function Home() {
       <div className="main-layout">
         {/* ── LEFT SIDEBAR ── */}
         <aside className="sidebar">
-          {/* 4 Case Example Prompts */}
-          <div className="sidebar-section">
-            <div className="sidebar-label">Example Queries</div>
+          {/* Example Prompts */}
+          <div className="sidebar-section examples-section">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.6rem" }}>
+              <div className="sidebar-label" style={{ marginBottom: 0 }}>Example Queries</div>
+              <div style={{ display: "flex", gap: "0.25rem" }}>
+                <button
+                  type="button"
+                  style={{
+                    fontSize: "0.65rem",
+                    fontWeight: 600,
+                    padding: "0.15rem 0.45rem",
+                    borderRadius: "4px",
+                    border: "1px solid var(--border-color)",
+                    background: exampleTab === "preindexed" ? "var(--accent-blue)" : "transparent",
+                    color: exampleTab === "preindexed" ? "#fff" : "var(--text-muted)",
+                    cursor: "pointer"
+                  }}
+                  onClick={() => setExampleTab("preindexed")}
+                >
+                  Corpora
+                </button>
+                <button
+                  type="button"
+                  style={{
+                    fontSize: "0.65rem",
+                    fontWeight: 600,
+                    padding: "0.15rem 0.45rem",
+                    borderRadius: "4px",
+                    border: "1px solid var(--border-color)",
+                    background: exampleTab === "novacorp" ? "var(--accent-blue)" : "transparent",
+                    color: exampleTab === "novacorp" ? "#fff" : "var(--text-muted)",
+                    cursor: "pointer"
+                  }}
+                  onClick={() => setExampleTab("novacorp")}
+                >
+                  NovaCorp Test
+                </button>
+              </div>
+            </div>
             <div className="example-prompts">
-              {EXAMPLE_PROMPTS.map((p) => (
+              {(exampleTab === "preindexed" ? EXAMPLE_PROMPTS : NOVACORP_PROMPTS).map((p) => (
                 <button
                   key={p.id}
                   className="example-btn"
@@ -576,7 +648,7 @@ export default function Home() {
           </div>
 
           {/* Upload Panel */}
-          <div className="sidebar-section">
+          <div className="sidebar-section upload-section">
             <div className="sidebar-label">Upload New PDF</div>
             <div
               className={`upload-zone${dragOver ? " drag-over" : ""}`}

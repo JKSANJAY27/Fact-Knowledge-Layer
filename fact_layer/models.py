@@ -175,6 +175,7 @@ class QueryRequest(BaseModel):
     entity_filter: Optional[str] = None
     period_filter: Optional[str] = None
     top_k: int = 10
+    session_id: Optional[str] = None
 
 
 class GroundedCitation(BaseModel):
